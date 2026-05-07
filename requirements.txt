@@ -3,6 +3,7 @@ scikit-learn
 pandas
 # DVC extra theo provider: [gs]=GCP, [s3]=AWS, [azure]=Azure
 dvc[s3]
+dvc-s3
 pathspec
 pytest
 fastapi
