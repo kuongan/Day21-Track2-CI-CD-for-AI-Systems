@@ -11,12 +11,13 @@ on:
 
 jobs:
 
-  # ---------------------------------------------------
-  # JOB 1 - TEST
-  # ---------------------------------------------------
+# ===================================================
+# JOB 1 - TEST
+# ===================================================
   test:
     name: Unit Test
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -31,15 +32,22 @@ jobs:
         run: pytest tests/ -v
 
 
-  # ---------------------------------------------------
-  # JOB 2 - TRAIN
-  # ---------------------------------------------------
+# ===================================================
+# JOB 2 - TRAIN
+# ===================================================
   train:
     name: Train
     needs: test
     runs-on: ubuntu-latest
+
     outputs:
       accuracy: ${{ steps.read_metrics.outputs.accuracy }}
+
+    env:
+      CLOUD_BUCKET: ${{ secrets.CLOUD_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: us-east-1
 
     steps:
       - uses: actions/checkout@v4
@@ -49,74 +57,96 @@ jobs:
           python-version: "3.10"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Authenticate to Cloud Storage
         run: |
-          echo '${{ secrets.CLOUD_CREDENTIALS }}' > /tmp/sa-key.json
-          echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/sa-key.json" >> $GITHUB_ENV
+          pip install -r requirements.txt
+          pip install "dvc[s3]"
 
+      # -------------------------------
+      # AWS AUTH (FIXED)
+      # -------------------------------
+      - name: Setup AWS credentials
+        run: |
+          echo "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}" >> $GITHUB_ENV
+
+      # -------------------------------
+      # DVC PULL
+      # -------------------------------
       - name: Pull data with DVC
-        run: dvc pull data/train_phase1.csv.dvc data/eval.csv.dvc
+        run: dvc pull
 
+      # -------------------------------
+      # TRAIN MODEL
+      # -------------------------------
       - name: Train model
         run: python src/train.py
 
+      # -------------------------------
+      # READ METRICS
+      # -------------------------------
       - name: Read metrics
         id: read_metrics
         run: |
           ACC=$(python -c "import json; print(json.load(open('outputs/metrics.json'))['accuracy'])")
           echo "accuracy=$ACC" >> $GITHUB_OUTPUT
 
-      - name: Upload model to Cloud Storage
+      # -------------------------------
+      # UPLOAD MODEL TO S3 (FIXED)
+      # -------------------------------
+      - name: Upload model to S3
         run: |
           python - <<'EOF'
+          import boto3
           import os
-          from google.cloud import storage
 
-          bucket_name = os.environ["CLOUD_BUCKET"]
-          client = storage.Client()
-          bucket = client.bucket(bucket_name)
+          bucket = os.environ["CLOUD_BUCKET"]
 
-          blob = bucket.blob("models/latest/model.pkl")
-          blob.upload_from_filename("models/model.pkl")
+          s3 = boto3.client("s3")
 
-          print("Uploaded model to GCS")
+          s3.upload_file(
+              "models/model.pkl",
+              bucket,
+              "models/latest/model.pkl"
+          )
+
+          print("Model uploaded to S3")
           EOF
-        env:
-          CLOUD_BUCKET: ${{ secrets.CLOUD_BUCKET }}
 
-      - name: Save metrics as artifact
+      # -------------------------------
+      # SAVE METRICS
+      # -------------------------------
+      - name: Save metrics artifact
         uses: actions/upload-artifact@v4
         with:
           name: metrics
           path: outputs/metrics.json
 
 
-  # ---------------------------------------------------
-  # JOB 3 - EVAL
-  # ---------------------------------------------------
+# ===================================================
+# JOB 3 - EVAL
+# ===================================================
   eval:
     name: Eval
     needs: train
     runs-on: ubuntu-latest
-    steps:
 
-      - name: Check eval gate
+    steps:
+      - name: Check accuracy gate
         run: |
           python - <<'EOF'
           acc = float("${{ needs.train.outputs.accuracy }}")
 
           if acc < 0.70:
-              raise SystemExit(f"FAILED: accuracy {acc:.4f} < 0.70. Stop pipeline.")
+              raise SystemExit(f"FAILED: accuracy {acc:.4f} < 0.70")
 
           print(f"PASSED: accuracy {acc:.4f}")
           EOF
 
 
-  # ---------------------------------------------------
-  # JOB 4 - DEPLOY
-  # ---------------------------------------------------
+# ===================================================
+# JOB 4 - DEPLOY
+# ===================================================
   deploy:
     name: Deploy
     needs: eval
@@ -125,10 +155,12 @@ jobs:
     steps:
       - name: SSH deploy to VM
         uses: appleboy/ssh-action@v1.0.3
+
         with:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
+
           script: |
             sudo systemctl restart mlops-serve
             sleep 5
