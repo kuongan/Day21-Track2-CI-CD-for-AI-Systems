@@ -1,0 +1,4 @@
+[core]
+    remote = myremote
+['remote "myremote"']
+    url = s3://vinuni-day21-mlops-kuongan/dvc
