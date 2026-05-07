@@ -2,7 +2,7 @@ mlflow
 scikit-learn
 pandas
 # DVC extra theo provider: [gs]=GCP, [s3]=AWS, [azure]=Azure
-dvc[gs]
+dvc[s3]
 pathspec
 pytest
 fastapi
