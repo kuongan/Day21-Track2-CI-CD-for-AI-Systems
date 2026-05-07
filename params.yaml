@@ -1,5 +1,7 @@
 # Sieu tham so cho mo hinh RandomForestClassifier
 # Thay doi cac gia tri nay giua cac lan chay de thi nghiem (Buoc 1)
 n_estimators: 200
-max_depth: 10
+max_depth: 20
 min_samples_split: 5
+max_features: 'sqrt'
+min_samples_leaf: 1
